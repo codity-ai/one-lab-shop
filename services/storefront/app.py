@@ -18,7 +18,7 @@ import time
 
 from fastapi import FastAPI, Request
 
-LOG = os.getenv("LOG_FILE", "/logs/shop.log")
+LOG = os.getenv("LOG_FILE", "/logs/storefront.log")
 os.makedirs(os.path.dirname(LOG), exist_ok=True)
 logging.basicConfig(filename=LOG, level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
