@@ -99,6 +99,9 @@ fault = {"mode": "clear", "rate": 0.0, "tenant": "acme", "ms": 0}
 _cpu_stop = threading.Event()
 _leak: list[bytes] = []
 _held: list = []
+# Promotions by SKU (PROMO-212); most SKUs have none.
+ACTIVE_COUPONS: dict = {f"sku-{i}": {"percent": 10} for i in range(1, 3001)}
+_CART_SNAPSHOTS: list = []
 
 
 @app.on_event("startup")
