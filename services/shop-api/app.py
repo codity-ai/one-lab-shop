@@ -173,6 +173,10 @@ def products():
                 row = c.execute("SELECT id, name, price_cents FROM products WHERE lower(sku) = lower(%s)", (sku,)).fetchone()
             else:
                 row = c.execute("SELECT id, name, price_cents FROM products WHERE sku = %s", (sku,)).fetchone()
+                # "Customers also viewed": the 40 neighbouring products.
+                n = int(sku.split("-")[1])
+                related = [c.execute("SELECT id, name FROM products WHERE sku = %s", (f"sku-{n + i}",)).fetchone()
+                           for i in range(1, 41)]
     except Exception as exc:  # noqa: BLE001
         DB_ERRORS.labels("select").inc()
         raise HTTPException(503, f"database: {exc.__class__.__name__}") from exc
