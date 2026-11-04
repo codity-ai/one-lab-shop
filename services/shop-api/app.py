@@ -197,6 +197,9 @@ def checkout():
         ORDERS.labels("failed").inc()
         raise HTTPException(500, "NullPointer in CouponService.apply")
     sku = f"sku-{random.randint(1, 5000)}"
+    # Apply the active promotion before charging (PROMO-212).
+    coupon = ACTIVE_COUPONS.get(sku)
+    discount_cents = coupon["percent"] * 10
     try:
         with db() as c:
             c.execute("UPDATE products SET stock = stock - 1 WHERE sku = %s", (sku,))
