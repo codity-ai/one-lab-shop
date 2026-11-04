@@ -12,10 +12,20 @@ Faults the process itself can produce (POST /admin/fault, JSON body):
   {"mode": "leak", "mb_per_s": 4}     an unbounded cache: grows until the container is OOM-killed
   {"mode": "slow_query"}              a missing index: /products runs a sequential scan with pg_sleep
   {"mode": "pool", "hold": 9}         connection leak: N pool connections taken and never returned
+  {"mode": "tenant_slow", "tenant": "acme", "ms": 800}
+                                      one tenant's requests are slow (only the span attribute says why)
+  {"mode": "no_propagation"}          the call to payments drops traceparent: one trace becomes two
+  {"mode": "raw_names"}               spans named by the raw URL (/orders/81723), no route template
   {"mode": "clear"}                   back to normal (a leak only clears on restart, like real life)
+
+Traces: the OpenTelemetry SDK with the FastAPI, psycopg, redis and urllib
+instrumentations, exported as OTLP to the customer's Collector
+(OTEL_EXPORTER_OTLP_ENDPOINT). Tracing is off when that is unset, so the
+metrics lab runs unchanged.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import random
 import threading
@@ -28,6 +38,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from psycopg_pool import ConnectionPool
+
+from opentelemetry import trace
 
 SERVICE = os.getenv("SERVICE_NAME", "shop-api")
 PG_DSN = os.getenv("PG_DSN", "postgresql://shop:shop@toxiproxy:15432/shop")
@@ -51,10 +63,39 @@ POOL_WAIT = Histogram("db_pool_wait_seconds", "Time waiting for a pool connectio
 ORDERS = Counter("orders_total", "Orders placed.", ["result"])
 
 app = FastAPI()
+TENANTS = ("acme", "globex", "initech", "umbrella", "hooli")
+
+
+def _tracing() -> None:
+    """OTel SDK, exported only when the deployment points it at a Collector."""
+    if not os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        return
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
+    from opentelemetry.instrumentation.redis import RedisInstrumentor
+    from opentelemetry.instrumentation.urllib import URLLibInstrumentor
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    provider = TracerProvider(resource=Resource.create({
+        "service.name": SERVICE, "service.version": os.getenv("SERVICE_VERSION", "dev"),
+        "deployment.environment.name": "lab"}))
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(provider)
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics,/healthz,/admin/fault")
+    PsycopgInstrumentor().instrument(enable_commenter=False)
+    RedisInstrumentor().instrument()
+    URLLibInstrumentor().instrument()
+
+
+_tracing()
+tracer = trace.get_tracer("shop-api")
 pool = ConnectionPool(PG_DSN, min_size=2, max_size=POOL_MAX, timeout=5, open=False)
 cache = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2, socket_connect_timeout=2)
 
-fault = {"mode": "clear", "rate": 0.0}
+fault = {"mode": "clear", "rate": 0.0, "tenant": "acme", "ms": 0}
 _cpu_stop = threading.Event()
 _leak: list[bytes] = []
 _held: list = []
@@ -102,6 +143,13 @@ async def _metrics(request: Request, call_next):
         return await call_next(request)
     t0 = time.perf_counter()
     status = 500
+    tenant = request.headers.get("x-tenant") or random.choice(TENANTS)
+    span = trace.get_current_span()
+    span.set_attribute("tenant", tenant)
+    if fault["mode"] == "raw_names":
+        span.update_name(f"{request.method} {request.url.path}/{random.randint(1, 10**6)}")
+    if fault["mode"] == "tenant_slow" and tenant == fault["tenant"]:
+        await asyncio.sleep(fault["ms"] / 1000)
     try:
         resp = await call_next(request)
         status = resp.status_code
@@ -157,7 +205,15 @@ def checkout():
     try:
         import urllib.request
 
-        urllib.request.urlopen(urllib.request.Request(f"{PAYMENTS_URL}/charge", method="POST", data=b"{}"), timeout=3).read()
+        req = urllib.request.Request(f"{PAYMENTS_URL}/charge", method="POST", data=b"{}")
+        if fault["mode"] == "no_propagation":
+            # A proxy or hand-rolled client that drops traceparent: payments starts a new trace.
+            from opentelemetry.instrumentation.utils import suppress_instrumentation
+
+            with suppress_instrumentation():
+                urllib.request.urlopen(req, timeout=3).read()
+        else:
+            urllib.request.urlopen(req, timeout=3).read()
     except Exception as exc:  # noqa: BLE001
         ORDERS.labels("failed").inc()
         raise HTTPException(502, f"payments: {exc.__class__.__name__}") from exc
@@ -196,7 +252,8 @@ async def set_fault(request: Request):
     while _held:
         _held.pop().__exit__(None, None, None)
         POOL_IN_USE.dec()
-    fault.update(mode=mode, rate=float(body.get("rate", 0.0)))
+    fault.update(mode=mode, rate=float(body.get("rate", 0.0)), tenant=body.get("tenant", "acme"),
+                 ms=int(body.get("ms", 0)))
     if mode == "cpu":
         _cpu_stop.clear()
         for _ in range(int(body.get("threads", 2))):
