@@ -13,4 +13,4 @@ One can be asked to connect a failure to the change that caused it.
 | `services/worker` | Invoice batch job | logback-style logs with stack traces (OTel `filelog`) |
 | `services/storefront` | Storefront checkout logger | Python `logging` text with tracebacks (Fluent Bit → Loki) |
 
-Not production code. Private on purpose.
+Not production code. Private on purpose. Faults arrive as commits; see the lab's code-lab/deploy.py.
