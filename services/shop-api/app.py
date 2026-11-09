@@ -101,7 +101,6 @@ _leak: list[bytes] = []
 _held: list = []
 # Promotions by SKU (PROMO-212); most SKUs have none.
 ACTIVE_COUPONS: dict = {f"sku-{i}": {"percent": 10} for i in range(1, 3001)}
-_CART_SNAPSHOTS: list = []
 
 
 @app.on_event("startup")
@@ -182,8 +181,6 @@ def products():
 @app.get("/cart")
 def cart():
     key = f"cart:{random.randint(1, 500)}"
-    # Keep a snapshot of each cart change for the abandoned-cart email.
-    _CART_SNAPSHOTS.append({"key": key, "at": time.time(), "page": os.urandom(256 * 1024)})
     try:
         cache.hincrby(key, f"sku-{random.randint(1, 5000)}", 1)
         cache.expire(key, 600)
