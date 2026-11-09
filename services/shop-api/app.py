@@ -90,7 +90,6 @@ def _tracing() -> None:
     URLLibInstrumentor().instrument()
 
 
-_tracing()
 tracer = trace.get_tracer("shop-api")
 pool = ConnectionPool(PG_DSN, min_size=2, max_size=POOL_MAX, timeout=5, open=False)
 cache = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2, socket_connect_timeout=2)
@@ -269,3 +268,9 @@ async def set_fault(request: Request):
             _held.append(cm)
             POOL_IN_USE.inc()
     return {"fault": fault}
+
+
+# Instrumented last: Starlette puts the last-added middleware outermost, so the
+# OTel server span must be added after _metrics() to contain its tenant
+# attribute and the tenant_slow delay.
+_tracing()
