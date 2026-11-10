@@ -55,9 +55,6 @@ def _traffic() -> None:
         order = f"ord_{random.randint(10000, 99999)}"
         emit("info", "order placed", order_id=order, amount_cents=random.randint(500, 20000),
              duration_ms=random.randint(20, 90))
-        # Award loyalty points; retry so a blip does not lose them.
-        for attempt in range(1, 6):
-            emit("error", "loyalty award failed: connection refused (loyalty:7070)", order_id=order, attempt=attempt)
         if random.random() < 0.02:
             emit("warn", "slow inventory lookup", order_id=order, duration_ms=random.randint(400, 900))
         mode = fault["mode"]
